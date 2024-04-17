@@ -6,8 +6,8 @@ use std::{
 };
 
 // const CRLF: &str = "";
-const RESPONSE_200: &[u8] = b"HTTP/1.1 200 OK\r\n\r\n";
-const RESPONSE_404: &[u8] = b"HTTP/1.1 404 Not Found\r\n\r\n";
+const RESPONSE_200: &str = "HTTP/1.1 200 OK\r\n\r\n";
+const RESPONSE_404: &str = "HTTP/1.1 404 Not Found\r\n\r\n";
 
 #[derive(Debug, PartialEq)]
 enum HttpMethod {
@@ -56,13 +56,28 @@ fn handle_connection(mut stream: std::net::TcpStream) {
         .collect();
 
     let mut parts = http_request[0].split_whitespace();
-
     let _method: HttpMethod = HttpMethod::from_str(parts.next().unwrap()).unwrap();
+    let req_endpoint = parts.next().unwrap();
 
-    let response = match parts.next().unwrap() {
-        "/" => RESPONSE_200,
-        _ => RESPONSE_404,
-    };
+    let response = handle_req(req_endpoint);
+    stream.write_all(response.as_bytes()).unwrap();
+}
 
-    stream.write_all(response).unwrap()
+fn handle_req(req: &str) -> String {
+    if req.len() == 1 {
+        RESPONSE_200.to_string()
+    } else if req.starts_with("/echo") {
+        make_resp_from_string(req.trim_start_matches("/echo/"))
+    } else {
+        return RESPONSE_404.to_string();
+    }
+}
+
+fn make_resp_from_string(resp: &str) -> String {
+    let base_text = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: ".to_string();
+    let content_length = resp.len();
+    format!(
+        "{} {}\r\n\r\n{}",
+        base_text, content_length, resp
+    )
 }
