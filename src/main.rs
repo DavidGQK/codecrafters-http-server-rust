@@ -1,30 +1,15 @@
 // Uncomment this block to pass the first stage
 use std::{
-    io::{BufRead, BufReader, Write},
+    env, fs,
+    io::{Read, Write},
     net::TcpListener,
-    str::FromStr,
+    thread,
 };
 
 // const CRLF: &str = "";
-const RESPONSE_200: &str = "HTTP/1.1 200 OK\r\n\r\n";
-const RESPONSE_404: &str = "HTTP/1.1 404 Not Found\r\n\r\n";
+// const RESPONSE_200: &str = "HTTP/1.1 200 OK\r\n\r\n";
+// const RESPONSE_404: &str = "HTTP/1.1 404 Not Found\r\n\r\n";
 
-#[derive(Debug, PartialEq)]
-enum HttpMethod {
-    GET,
-    POST,
-}
-impl FromStr for HttpMethod {
-    type Err = ();
-
-    fn from_str(input: &str) -> Result<HttpMethod, Self::Err> {
-        match input {
-            "GET" => Ok(HttpMethod::GET),
-            "POST" => Ok(HttpMethod::POST),
-            _ => Err(()),
-        }
-    }
-}
 
 fn main() {
     // You can use print statements as follows for debugging, they'll be visible when running tests.
@@ -36,9 +21,16 @@ fn main() {
 
     for stream in listener.incoming() {
         match stream {
-            Ok(mut _stream) => {
-                println!("accepted new connection");
-                handle_connection(_stream)
+            Ok(mut stream) => {
+                thread::spawn(move || {
+                    let mut buffer = [0; 1024];
+                    stream.read(&mut buffer).unwrap();
+                    let request = String::from_utf8_lossy(&buffer[..]);
+                    let response = build_response(request.to_string());
+                    stream.write(response.as_bytes()).unwrap();
+                    stream.flush().unwrap();
+                    1
+                });
             }
             Err(e) => {
                 println!("error: {}", e);
@@ -47,48 +39,52 @@ fn main() {
     }
 }
 
-fn handle_connection(mut stream: std::net::TcpStream) {
-    let buf_reader = BufReader::new(&mut stream);
-    let http_request: Vec<_> = buf_reader
-        .lines()
-        .map(|result| result.unwrap())
-        .take_while(|line| !line.is_empty())
-        .collect();
-
-    let user_agent_header: String = http_request
-        .iter()
-        .filter(|s| s.starts_with("User-Agent:"))
-        .map(|s| s.split_whitespace().nth(1).unwrap())
-        .collect::<Vec<_>>()
-        .first()
-        .unwrap()
-        .to_string();
-
-    let mut parts = http_request[0].split_whitespace();
-    let _method: HttpMethod = HttpMethod::from_str(parts.next().unwrap()).unwrap();
-    let req_endpoint = parts.next().unwrap();
-
-    let response = handle_req(req_endpoint, user_agent_header);
-    stream.write_all(response.as_bytes()).unwrap();
-}
-
-fn handle_req(req: &str, user_agent_header: String) -> String {
-    if req.len() == 1 {
-        RESPONSE_200.to_string()
-    } else if req.starts_with("/echo") {
-        make_resp_from_string(req.trim_start_matches("/echo/"))
-    } else if req.starts_with("/user-agent") {
-        make_resp_from_string(user_agent_header.as_str())
-    } else {
-        return RESPONSE_404.to_string();
+fn build_response(request: String) -> String {
+    let lines: Vec<&str> = request.split("\r\n").collect();
+    if lines.is_empty() {
+        return "HTTP/1.1 400 BAD REQUEST\r\n\r\n".to_string();
     }
-}
 
-fn make_resp_from_string(resp: &str) -> String {
-    let base_text = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: ".to_string();
-    let content_length = resp.len();
-    format!(
-        "{} {}\r\n\r\n{}",
-        base_text, content_length, resp
-    )
+    let req_target: Vec<&str> = lines[0].split_whitespace().collect();
+    let path = req_target[1];
+    let _req_host: Vec<&str> = lines[1].split_whitespace().collect();
+    let req_user_agent: Vec<&str> = lines[2].split_whitespace().collect();
+
+    if path == "/" {
+        return "HTTP/1.1 200 OK\r\n\r\n".to_string();
+    }
+    if path == "/user-agent" {
+        let user_agent = req_user_agent[1];
+        return format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}",
+            user_agent.len(),
+            user_agent
+        );
+    } else if path.starts_with("/echo/") {
+        let random_string = path.trim_start_matches("/echo/");
+        return format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}",
+            random_string.len(),
+            random_string
+        );
+    } else if path.starts_with("/files") {
+        let filename = &path[7..];
+        let args = env::args().collect::<Vec<String>>();
+        let dir = args[2].clone();
+        let filename = format!("{}/{}", dir, filename);
+        println!("Reading file: {}", filename);
+        let file = fs::read_to_string(filename);
+        match file {
+            Ok(fc) => {
+                println!("File opened successfully");
+                return format!("HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\n\r\n{}\r\n", fc.len(), fc.to_string());
+            }
+            Err(error) => {
+                println!("Error opening file: {}", error);
+                return "HTTP/1.1 404 Not Found\r\n\r\n".to_string();
+            }
+        }
+    }
+
+    return "HTTP/1.1 404 NOT FOUND\r\n\r\n".to_string();
 }
